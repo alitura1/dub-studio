@@ -52,6 +52,12 @@ function getWorkletUrl(): string {
 export function useRecorder() {
   const [state, setState] = useState<RecorderState>('idle')
   const [level, setLevel] = useState(0)
+  /**
+   * Aynı seviye, ref olarak.
+   * Dalga formu her karede okuyor; state üzerinden gitseydi saniyede 60 kez
+   * React render'ı tetiklenirdi.
+   */
+  const levelRef = useRef(0)
   /** Çeviri anahtarı; metni gösteren taraf üretiyor. */
   const [error, setError] = useState<'mic.denied' | 'mic.unavailable' | null>(null)
 
@@ -123,7 +129,9 @@ export function useRecorder() {
         analyser.getFloatTimeDomainData(data)
         let sum = 0
         for (const v of data) sum += v * v
-        setLevel(Math.min(1, Math.sqrt(sum / data.length) * 4))
+        const rms = Math.sqrt(sum / data.length)
+        levelRef.current = rms
+        setLevel(Math.min(1, rms * 4))
         rafRef.current = requestAnimationFrame(tick)
       }
       tick()
@@ -198,5 +206,5 @@ export function useRecorder() {
 
   useEffect(() => release, [release])
 
-  return { state, level, error, arm, start, stop, markLineStart, release }
+  return { state, level, levelRef, error, arm, start, stop, markLineStart, release }
 }

@@ -63,6 +63,9 @@ const tr = {
   'player.preparingPreview': 'Önizleme hazırlanıyor…',
   'player.character': 'Replik',
 
+  'wave.reference': 'Referans',
+  'wave.you': 'Sen',
+
   'score.of100': '/ 100',
   'score.timing': 'Zamanlama',
   'score.energy': 'Enerji',
@@ -238,6 +241,10 @@ const en: Messages = {
   'player.loadingPack': 'Loading pack…',
   'player.preparingPreview': 'Preparing preview…',
   'player.character': 'Line',
+
+
+  'wave.reference': 'Reference',
+  'wave.you': 'You',
 
   'score.of100': '/ 100',
   'score.timing': 'Timing',

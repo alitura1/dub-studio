@@ -9,6 +9,8 @@
 > published on itch.io by
 > [YeahMaybe](https://yeahmaybe.itch.io/the-choicer-voicer).
 
+**Live: https://dub-studio-eight.vercel.app**
+
 A dubbing game that runs entirely in the browser: pick a clip, perform each line
 into your microphone, get scored on timing, delivery and intonation, then
 download the result as an MP4.
@@ -81,6 +83,12 @@ lower is not making a mistake. What is scored is the *shape* of the contour. Whe
 pitch cannot be measured (loud background music), the score is re-weighted across
 the remaining two axes and the user is told so explicitly.
 
+**While you record**, the line's reference envelope is drawn as a target shape
+and your microphone is traced over it in real time, on the same axis. Both are
+normalised to their own peak, so what you are matching is the shape — timing and
+emphasis — not how loud you happen to be. The trace stays on screen afterwards so
+you can compare the take against the reference before deciding to keep it.
+
 **Recording** captures raw PCM through an AudioWorklet and writes WAV.
 MediaRecorder is deliberately not used: `decodeAudioData` cannot decode its
 WebM/Opus output, so takes were recorded but never scoreable.
@@ -88,6 +96,10 @@ WebM/Opus output, so takes were recorded but never scoreable.
 **Export** renders the mix sample-accurately with `OfflineAudioContext`;
 ffmpeg.wasm only swaps the container (`-c:v copy`). Because the video stream is
 never re-encoded, a 26-second clip muxes in about two seconds.
+
+The moment a line starts is marked from a timer as well as from
+`requestAnimationFrame`: rAF is suspended in a background tab while the video
+keeps playing, which used to leave the take recorded but misaligned.
 
 **Original audio while you speak** — three modes:
 

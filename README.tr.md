@@ -10,6 +10,8 @@
 > [YeahMaybe](https://yeahmaybe.itch.io/the-choicer-voicer) tarafından
 > yayınlanmıştır.
 
+**Canlı: https://dub-studio-eight.vercel.app**
+
 Tarayıcıda çalışan dublaj oyunu: bir klip seç, replikleri mikrofonla seslendir,
 zamanlaman / vurgun / tonlaman referansla karşılaştırılıp puanlansın, sonucu MP4
 olarak indir.
@@ -80,6 +82,12 @@ ederse bu hata değil. Ölçülen şey konturun *şekli*. Perde ölçülemezse (
 müziği baskınsa) skor kalan iki eksene göre yeniden ağırlıklandırılıyor ve bu
 kullanıcıya açıkça söyleniyor.
 
+**Kayıt sırasında** repliğin referans zarfı bir şablon olarak çiziliyor ve
+mikrofonun aynı eksende, gerçek zamanlı olarak üzerine bindiriliyor. İki zarf da
+kendi tepesine göre normalize ediliyor: eşleştirdiğin şey ses yüksekliği değil,
+şekil — nerede başladığın, nerede vurguladığın. Kayıttan sonra çizim ekranda
+kalıyor, take'i tutmadan önce referansla karşılaştırabiliyorsun.
+
 **Kayıt** ham PCM olarak alınıyor (AudioWorklet), WAV'a yazılıyor. MediaRecorder
 kullanılmıyor: WebM/Opus çıktısını `decodeAudioData` çözemediği için kayıtlar
 puanlanamıyordu.
@@ -87,6 +95,10 @@ puanlanamıyordu.
 **Dışa aktarma** miksi `OfflineAudioContext` ile örnek-doğru üretiyor, ffmpeg.wasm
 yalnızca kapsayıcıyı değiştiriyor (`-c:v copy`). Video yeniden kodlanmadığı için
 26 saniyelik bir klip ~2 saniyede birleşiyor.
+
+Repliğin başladığı an hem `requestAnimationFrame` hem de bir zamanlayıcıyla
+işaretleniyor: sekme arka plana alındığında rAF duruyor ama video oynamaya devam
+ediyor; eskiden bu durumda kayıt alınıyor ama hizalaması kayboluyordu.
 
 **Sen konuşurken orijinal ses** üç moddan biri:
 

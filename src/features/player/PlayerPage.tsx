@@ -9,6 +9,7 @@ import { ScoreCard, scoreClass } from '../scoring/ScoreCard.tsx'
 import { useRecorder } from '../recorder/useRecorder.ts'
 import { usePackData } from './usePackData.ts'
 import { ExportPanel } from '../export/ExportPanel.tsx'
+import { envelopeColumns, LineWaveform, type LineWaveformHandle } from './LineWaveform.tsx'
 import { buildCenterRemoved, type OriginalMode } from '../export/mix.ts'
 import { useT } from '../../i18n/index.tsx'
 
@@ -41,6 +42,7 @@ export function PlayerPage({ packId, local, project, onNavigate }: Props) {
     /** İki yerden birden bitirilmeye çalışılmasın (rAF + zaman aşımı). */
     finishing: boolean
     deadline: ReturnType<typeof setTimeout> | null
+    markTimer: ReturnType<typeof setTimeout> | null
   } | null>(null)
 
   const [takes, setTakes] = useState<Map<string, StoredTake[]>>(new Map())
@@ -60,6 +62,9 @@ export function PlayerPage({ packId, local, project, onNavigate }: Props) {
    * saklıyoruz.
    */
   const graphRef = useRef<{ main: GainNode; side: GainNode } | null>(null)
+  const waveRef = useRef<LineWaveformHandle>(null)
+  /** Seçili take'in zarfı; kayıt bitince ve take değişince yeniden hesaplanıyor. */
+  const [userEnvelope, setUserEnvelope] = useState<Float32Array | null>(null)
 
   const ensureGraph = useCallback(async () => {
     if (graphRef.current) return graphRef.current
@@ -117,6 +122,7 @@ export function PlayerPage({ packId, local, project, onNavigate }: Props) {
         if (session.finishing) return
         session.finishing = true
         if (session.deadline !== null) clearTimeout(session.deadline)
+        if (session.markTimer !== null) clearTimeout(session.markTimer)
       }
 
       const video = videoRef.current
@@ -185,7 +191,9 @@ export function PlayerPage({ packId, local, project, onNavigate }: Props) {
       setSelectedId(line.id)
       setPhase('leadin')
       setCueProgress(0)
-      sessionRef.current = { line, marked: false, finishing: false, deadline: null }
+      waveRef.current?.reset()
+      setUserEnvelope(null)
+      sessionRef.current = { line, marked: false, finishing: false, deadline: null, markTimer: null }
 
       // Geri sayımı video zamanından değil kendi saatimizden sürüyoruz.
       // Video'ya bağlıydı ve leadInMs 800 ms olduğu için sayaç doğrudan "1"de
@@ -218,10 +226,34 @@ export function PlayerPage({ packId, local, project, onNavigate }: Props) {
        * süreye dayanıp donuyor, sekme arka plana alındığında da
        * requestAnimationFrame duruyor. İkisinde de kayıt kendiliğinden bitmiyordu.
        */
-      const expectedMs = (line.endMs + TAIL_MS - playFrom) / (video.playbackRate || 1)
+      const rate = video.playbackRate || 1
+      const expectedMs = (line.endMs + TAIL_MS - playFrom) / rate
       const session = sessionRef.current
+
+      /**
+       * Repliğin başladığı anı işaretler: kaydın hizalaması buna dayanıyor.
+       * İki kaynaktan da çağrılıyor ve tekrar çağrılmaya karşı korumalı.
+       */
+      const markNow = () => {
+        const current = sessionRef.current
+        if (!current || current.marked) return
+        current.marked = true
+        recorder.markLineStart()
+        // Referans sesi mikrofona sızmasın diye replik boyunca susturuyoruz
+        if (videoRef.current) videoRef.current.muted = true
+        setPhase('recording')
+      }
+
       if (session) {
         session.deadline = setTimeout(() => void finishRecording(line), Math.max(500, expectedMs + 1200))
+        /*
+         * İşaretlemeyi yalnızca rAF'a bırakmak yetmiyor: sekme arka plana
+         * alındığında requestAnimationFrame duruyor, video oynamaya devam
+         * ediyor ve replik hiç işaretlenmiyor — kayıt alınıyor ama hizalaması
+         * kayboluyor, "erken/geç girdin" ölçümü çöpe gidiyor. Zamanlayıcı
+         * garantiyi veriyor, rAF görünürken daha isabetli olanı yapıyor.
+         */
+        session.markTimer = setTimeout(markNow, Math.max(0, (line.startMs - playFrom) / rate))
       }
 
       const tick = () => {
@@ -229,17 +261,14 @@ export function PlayerPage({ packId, local, project, onNavigate }: Props) {
         if (!current || !videoRef.current) return
         const t = videoRef.current.currentTime * 1000
 
-        if (!current.marked && t >= current.line.startMs) {
-          current.marked = true
-          recorder.markLineStart()
-          // Referans sesi mikrofona sızmasın diye replik boyunca susturuyoruz
-          videoRef.current.muted = true
-          setPhase('recording')
-        }
+        if (!current.marked && t >= current.line.startMs) markNow()
 
         if (current.marked) {
           const span = current.line.endMs - current.line.startMs
-          setCueProgress(Math.max(0, Math.min(1, (t - current.line.startMs) / span)))
+          const progress = Math.max(0, Math.min(1, (t - current.line.startMs) / span))
+          setCueProgress(progress)
+          // Canlı dalga formu: seviyeyi ref'ten okuyoruz, her karede render yok
+          waveRef.current?.push(progress, recorder.levelRef.current)
         }
 
         // Video bittiyse zaman ilerlemeyeceği için eşik hiç yakalanmaz
@@ -381,6 +410,35 @@ export function PlayerPage({ packId, local, project, onNavigate }: Props) {
     })
   }, [])
 
+  /**
+   * Seçili take'in zarfını çıkarır.
+   * Kayıt biter bitmez take listeye düştüğü için bu efekt kendiliğinden
+   * tetikleniyor; ayrıca eski bir take'e geçildiğinde de doğru zarf geliyor.
+   */
+  useEffect(() => {
+    if (!selected || phase !== 'idle') return
+    const take = activeTakeFor(selected.id)
+    if (!take) {
+      setUserEnvelope(null)
+      return
+    }
+    let alive = true
+    ;(async () => {
+      try {
+        const buffer = await decodeAudio(await take.blob.arrayBuffer())
+        const pcm = resampleLinear(buffer.getChannelData(0), buffer.sampleRate, ANALYSIS_RATE)
+        // Kayıt replikten leadTrimMs önce başlıyor; aynı hizadan çizmek için kırp
+        const trim = Math.round((take.leadTrimMs / 1000) * ANALYSIS_RATE)
+        if (alive) setUserEnvelope(envelopeColumns(pcm.subarray(Math.min(trim, pcm.length))))
+      } catch {
+        if (alive) setUserEnvelope(null)
+      }
+    })()
+    return () => {
+      alive = false
+    }
+  }, [selected, phase, activeTakeFor])
+
   // Klavye: boşluk kaydeder, Escape durdurur, ok tuşları replik gezer
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -409,6 +467,7 @@ export function PlayerPage({ packId, local, project, onNavigate }: Props) {
       stopLoop()
       // Sayfadan ayrılırken bekleyen zaman aşımı tetiklenmesin
       if (sessionRef.current?.deadline) clearTimeout(sessionRef.current.deadline)
+      if (sessionRef.current?.markTimer) clearTimeout(sessionRef.current.markTimer)
       sessionRef.current = null
     },
     [stopLoop],
@@ -483,6 +542,17 @@ export function PlayerPage({ packId, local, project, onNavigate }: Props) {
               )}
             </div>
           </div>
+
+          {selected && data && (
+            <LineWaveform
+              ref={waveRef}
+              refPcm={data.refPcm}
+              sampleRate={ANALYSIS_RATE}
+              line={selected}
+              userEnvelope={userEnvelope}
+              recording={phase === 'recording'}
+            />
+          )}
 
           <div className="transport">
             {phase === 'idle' ? (
