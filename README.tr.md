@@ -1,0 +1,154 @@
+# Dublaj Stüdyosu
+
+*[English](README.md) · **Türkçe***
+
+> **Bu nedir?** Tarayıcıda çalışan dublaj oyunu
+> [choicervoicer.games](https://choicervoicer.games/) sitesinden esinlenerek
+> yazılmış, bağımsız ve açık kaynaklı bir klondur. O siteyle hiçbir bağı yoktur;
+> kodun ve içeriğin tamamı sıfırdan üretilmiştir. Aynı ismi taşıyan özgün oyun
+> "The Choicer Voicer", itch.io üzerinde
+> [YeahMaybe](https://yeahmaybe.itch.io/the-choicer-voicer) tarafından
+> yayınlanmıştır.
+
+Tarayıcıda çalışan dublaj oyunu: bir klip seç, replikleri mikrofonla seslendir,
+zamanlaman / vurgun / tonlaman referansla karşılaştırılıp puanlansın, sonucu MP4
+olarak indir.
+
+Sunucu yok. Ses ve video cihazdan çıkmıyor; miks ve MP4 üretimi tarayıcıda oluyor.
+
+## Çalıştırma
+
+```bash
+npm install
+npm run dev
+```
+
+| Komut | Ne yapar |
+| --- | --- |
+| `npm run dev` | Geliştirme sunucusu (http://localhost:5273) |
+| `npm run build` | Tip kontrolü + üretim derlemesi (`dist/`) |
+| `npm test` | Skor motoru testleri |
+| `npm run kontrol` | Sadece tip kontrolü |
+| `npm run paket -- …` | Klipten dublaj paketi üretir (aşağıda) |
+
+## Hazır demo
+
+`public/packs/sorgu-odasi/` — 14.5 saniyelik iki kişilik sorgu sahnesi, 5 replik.
+Tamamı sentetik: konuşma Windows SAPI ile üretildi, görüntü ve arka plan müziği
+ffmpeg ile. Hiçbir dış içerik yok, dolayısıyla dağıtılabilir.
+
+Diyalog bilerek merkeze, arka plan pedi yanlara pan’lendi; böylece
+**Sesi bastır, müziği koru** modu bu klipte gözle görülür çalışıyor: replik
+sırasında konuşma −17 dB'den iptal oluyor, müzik yerinde kalıyor.
+
+## Paket üretme
+
+Tarayıcı YouTube'dan doğrudan video çekemez (CORS + ToS), bu yüzden URL içe
+aktarma yerel bir CLI ile yapılıyor.
+
+```bash
+# URL'den (yt-dlp gerekir: pip install -U yt-dlp)
+npm run paket -- "https://youtu.be/xxxx" --bas 1:12 --sure 20 --ad "Sahne adı" --yerel
+
+# Yerel dosyadan
+npm run paket -- --dosya "C:\klipler\sahne.mp4" --ad "Test sahnesi"
+```
+
+Araç klibi 720p H.264 + AAC'ye normalize eder, 16 kHz mono `ref.wav` çıkarır,
+sessizlikten replik sınırlarını bulur ve `pack.json` yazar. Replik metinleri boş
+gelir — uygulamada **Kendi videon → Transkript çıkar** ile doldurabilir ya da elle
+yazabilirsin.
+
+### `--yerel` ve telif
+
+`--yerel` paketi `public/packs/yerel/` altına yazar; bu klasör `.gitignore`'lu ve
+deploy edilmez. Dizi/film klipleri buraya. `public/packs/` altındakiler ise
+dağıtılır — oraya yalnızca hakkına sahip olduğun içeriği koy.
+
+## Nasıl çalışıyor
+
+**Skor** (`src/features/scoring/score.ts`) üç bağımsız eksen ölçüyor:
+
+| Eksen | Ağırlık | Ölçüm |
+| --- | --- | --- |
+| Zamanlama | %35 | DTW yolunun köşegenden sapması + ilk sesli çerçeve farkı |
+| Enerji | %30 | Hizalanmış RMS zarflarının korelasyonu |
+| Tonlama | %35 | Medyan-ortalanmış YIN perde konturunun güven ağırlıklı korelasyonu |
+
+Mutlak perde bilerek yok sayılıyor: kalın sesli biri bir oktav aşağıdan taklit
+ederse bu hata değil. Ölçülen şey konturun *şekli*. Perde ölçülemezse (arka plan
+müziği baskınsa) skor kalan iki eksene göre yeniden ağırlıklandırılıyor ve bu
+kullanıcıya açıkça söyleniyor.
+
+**Kayıt** ham PCM olarak alınıyor (AudioWorklet), WAV'a yazılıyor. MediaRecorder
+kullanılmıyor: WebM/Opus çıktısını `decodeAudioData` çözemediği için kayıtlar
+puanlanamıyordu.
+
+**Dışa aktarma** miksi `OfflineAudioContext` ile örnek-doğru üretiyor, ffmpeg.wasm
+yalnızca kapsayıcıyı değiştiriyor (`-c:v copy`). Video yeniden kodlanmadığı için
+26 saniyelik bir klip ~2 saniyede birleşiyor.
+
+**Sen konuşurken orijinal ses** üç moddan biri:
+
+- `Tamamen sustur` (varsayılan) — replik boyunca orijinal ses kesilir
+- `Sesi bastır, müziği koru` — stereo merkez iptali (L−R); diyalog ortada olduğu
+  için kaybolur, müzik ve efektler kalır. Kaynak dual-mono ise uygulanamaz,
+  otomatik olarak susturmaya düşer ve uyarı gösterilir
+- `Sadece kıs` — orijinal %12 seviyede altta duyulur
+
+## Transkripsiyon
+
+Whisper (transformers.js) tarayıcıda çalışıyor; ses hiçbir yere gönderilmiyor,
+yalnızca model dosyaları huggingface.co'dan bir kez indirilip önbelleğe alınıyor.
+
+Net kayıtta sonuç birebir doğru — demo paketin beş repliği de kelimesi kelimesine
+çıkıyor. **Arka planında yüksek müzik olan film kliplerinde güvenilmez**; Whisper
+konuşma yerine uydurma üretiyor ("I'm sorry." gibi). Bu klipler için replik
+metinlerini Studio'da elle yazmak gerekiyor.
+
+**Zaman damgaları replik sınırı değil.** Whisper sesi baştan sona kaplayan bitişik
+aralıklar döndürüyor: demo klipte ilk parçaya "0.00–5.44" diyor, oysa konuşma
+1.00'da başlayıp 4.35'te bitiyor. Bu yüzden sınırlar her zaman enerji tabanlı
+`segmentLines`'tan, metinler Whisper'dan alınıp örtüşmeye göre eşleştiriliyor
+(`src/features/transcribe/apply.ts`).
+
+> - `q8` kuantizasyonu mevcut onnxruntime-web sürümünde oturum açamıyor;
+>   varsayılan `q4`.
+> - Varsayılan çalıştırma hedefi WASM. WebGPU bu klip boyutlarında ölçülebilir
+>   kazanç vermedi (13.0 sn'ye karşı 13.8 sn) ve bir denemede sekmeyi düşürdü;
+>   isteyen `device: 'webgpu'` ile açabilir.
+
+## Bilinen konular
+
+- `npm audit`, `@huggingface/transformers`'ın **Node tarafı** bağımlılıkları
+  (`onnxruntime-node`, `sharp`) için yüksek önem dereceli uyarı veriyor. Tarayıcı
+  yolu WASM kullanıyor, bu paketler çalışma zamanında hiç yüklenmiyor; yine de
+  transkripsiyona ihtiyacın yoksa bağımlılığı kaldırabilirsin.
+- ffmpeg.wasm çekirdeği ~32 MB. `public/ffmpeg/` altına `npm install` sonrası
+  kopyalanıyor (`scripts/ffmpeg-kopyala.mjs`), repoda tutulmuyor, ve yalnızca ilk
+  dışa aktarmada indiriliyor.
+- Studio'da yüklenen video sınırları: 3 dakika / 150 MB (tarayıcı belleği).
+
+## Diller
+
+Arayüz Türkçe ve İngilizce. Dil, tarayıcı diline göre seçilir, üst çubuktan
+değiştirilebilir ve tercih `localStorage`'da saklanır.
+
+Metinlerin tamamı [`src/i18n/messages.ts`](src/i18n/messages.ts) içinde. Bir
+dilde eksik anahtar bırakmak derleme hatası verir, yani çeviri unutulamaz. Skor
+motoru geri bildirimi metin değil kod döndürür (`{ code: 'late', ms: 320 }`);
+çeviriyi arayüz yapar, böylece DSP katmanı dilden habersiz kalır.
+
+## Deploy
+
+Statik çıktı; `dist/` klasörünü olduğu gibi yayınla (Vercel, Cloudflare Pages,
+Netlify, GitHub Pages…). SharedArrayBuffer kullanılmadığı için COOP/COEP
+başlığı gerekmiyor.
+
+```bash
+npm run build
+```
+
+## Lisans
+
+MIT — bkz. [LICENSE](LICENSE).

@@ -1,0 +1,67 @@
+{
+  "schemaVersion": 1,
+  "id": "sorgu-odasi",
+  "title": "Sorgu Odası",
+  "video": "clip.mp4",
+  "reference": "ref.wav",
+  "durationMs": 14510,
+  "characters": [
+    {
+      "id": "k1",
+      "name": "Dedektif",
+      "color": "#e0573f"
+    },
+    {
+      "id": "k2",
+      "name": "Şüpheli",
+      "color": "#3f8ee0"
+    }
+  ],
+  "lines": [
+    {
+      "id": "l1",
+      "characterId": "k1",
+      "startMs": 904,
+      "endMs": 4376,
+      "text": "Where were you last night?",
+      "leadInMs": 800
+    },
+    {
+      "id": "l2",
+      "characterId": "k2",
+      "startMs": 5160,
+      "endMs": 6872,
+      "text": "That is none of your business.",
+      "leadInMs": 800
+    },
+    {
+      "id": "l3",
+      "characterId": "k1",
+      "startMs": 7592,
+      "endMs": 10264,
+      "text": "It became my business the moment you lied to me.",
+      "leadInMs": 800
+    },
+    {
+      "id": "l4",
+      "characterId": "k2",
+      "startMs": 11016,
+      "endMs": 12056,
+      "text": "Then arrest me.",
+      "leadInMs": 800
+    },
+    {
+      "id": "l5",
+      "characterId": "k2",
+      "startMs": 12616,
+      "endMs": 13560,
+      "text": "Or get out.",
+      "leadInMs": 800
+    }
+  ],
+  "source": {
+    "kind": "file",
+    "ref": "sentetik (TTS + ffmpeg)"
+  },
+  "local": false
+}
