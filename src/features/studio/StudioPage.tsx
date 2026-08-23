@@ -16,8 +16,16 @@ import { Waveform } from './Waveform.tsx'
 import { TranscribePanel } from '../transcribe/TranscribePanel.tsx'
 import { useT } from '../../i18n/index.tsx'
 
-const MAX_BYTES = 150 * 1024 * 1024
-const MAX_MS = 3 * 60 * 1000
+const MAX_BYTES = 500 * 1024 * 1024
+const MAX_MS = 10 * 60 * 1000
+/**
+ * Bu sürenin üstünde uyarı gösteriyoruz.
+ * Düzenleme tarafı uzun kliplerde de akıcı, ama dışa aktarma tüm sesi
+ * OfflineAudioContext'te üretip ffmpeg.wasm'a veriyor: 10 dakikalık stereo
+ * miks tek başına ~230 MB. Sınırı engel yapmak yerine, nerede zorlanacağını
+ * önceden söylemek daha doğru.
+ */
+const HEAVY_MS = 5 * 60 * 1000
 
 interface Props {
   packId?: string
@@ -146,11 +154,9 @@ export function StudioPage({ packId, local, project, onNavigate }: Props) {
 
       setLoaded({ pack, videoUrl: url, videoBlob: file, pcm, readOnlySource: false })
       setSelectedId(pack.lines[0]?.id ?? null)
-      setStatus(
-        ranges.length > 0
-          ? t('studio.foundLines', { n: ranges.length })
-          : t('studio.noLinesFound'),
-      )
+      const found =
+        ranges.length > 0 ? t('studio.foundLines', { n: ranges.length }) : t('studio.noLinesFound')
+      setStatus(durationMs > HEAVY_MS ? `${found} ${t('studio.heavyWarning')}` : found)
     } catch (err) {
       console.error(err)
       setError(t('studio.unreadable'))

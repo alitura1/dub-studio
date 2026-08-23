@@ -18,6 +18,26 @@ export interface TranscriptSegment {
   text: string
 }
 
+/** Tek bir kelime ve kendi zaman aralığı. */
+export interface TranscriptWord {
+  startMs: number
+  endMs: number
+  text: string
+}
+
+export interface TranscriptResult {
+  /** Gösterim için cümle benzeri gruplar. */
+  segments: TranscriptSegment[]
+  /**
+   * Kelime düzeyinde zaman damgaları. Repliklere metin dağıtmak için asıl
+   * kaynak bu: Whisper'ın parça damgaları sesi kaplayan uzun bitişik
+   * aralıklar olduğu için tek parça birkaç repliği birden kapsıyor ve aynı
+   * metin hepsine yazılıyordu. Model üretemezse boş kalır, çağıran taraf
+   * parça bazlı eşleştirmeye düşer.
+   */
+  words: TranscriptWord[]
+}
+
 export interface TranscribeProgress {
   /**
    * Çeviri anahtarı ya da hazır metin. Modül arayüzün dilini bilmediği için
@@ -42,16 +62,28 @@ export interface TranscribeOptions {
   signal?: AbortSignal
 }
 
-/** Küçük model hızlı ama daha çok hata yapıyor; base gündelik kullanım için iyi denge. */
+/**
+ * `_timestamped` varyantları kelime düzeyinde zaman damgası üretebiliyor.
+ * Düz `onnx-community/whisper-base` cross-attention çıktısı olmadan
+ * derlendiği için "Model outputs must contain cross attentions" hatası
+ * veriyor ve yalnızca parça damgası dönüyordu; metnin hangi repliğe
+ * yazılacağına karar vermek için kelime damgası şart.
+ */
 export const WHISPER_MODELS = [
-  { id: 'onnx-community/whisper-tiny', size: 'tiny' },
-  { id: 'onnx-community/whisper-base', size: 'base' },
-  { id: 'onnx-community/whisper-small', size: 'small' },
+  /*
+   * `speed` = gerçek zamana oran, WASM üzerinde ölçüldü: base modeli
+   * 14.5 saniyelik klibi ısınmış hâlde 14.9 saniyede yazıya döktü (1.03×).
+   * Diğer ikisi parametre sayısına göre ölçeklendi. Uzun kliplerde kullanıcıya
+   * ne kadar bekleyeceğini söylemek için var.
+   */
+  { id: 'onnx-community/whisper-tiny_timestamped', size: 'tiny', speed: 0.45 },
+  { id: 'onnx-community/whisper-base_timestamped', size: 'base', speed: 1.03 },
+  { id: 'onnx-community/whisper-small_timestamped', size: 'small', speed: 3.2 },
 ] as const
 
 export type WhisperDtype = 'auto' | 'fp32' | 'fp16' | 'q8' | 'q4' | 'q4f16'
 
-export const DEFAULT_MODEL = 'onnx-community/whisper-base'
+export const DEFAULT_MODEL = 'onnx-community/whisper-base_timestamped'
 
 /**
  * q8 bu onnxruntime-web sürümünde oturum açamıyor
@@ -115,7 +147,7 @@ interface WhisperChunk {
 export async function transcribe(
   pcm: Float32Array,
   options: TranscribeOptions = {},
-): Promise<TranscriptSegment[]> {
+): Promise<TranscriptResult> {
   const model = options.model ?? DEFAULT_MODEL
   /*
    * Varsayılan WASM. WebGPU teoride daha hızlı ama bu klip boyutlarında
@@ -132,18 +164,56 @@ export async function transcribe(
   )
 
   options.onProgress?.({ stage: 'analyzing', ratio: -1 })
-  const result = (await transcriber(pcm, {
-    return_timestamps: true,
-    chunk_length_s: 30,
-    stride_length_s: 5,
-    task: 'transcribe',
-    ...(options.language ? { language: options.language } : {}),
-  })) as { text?: string; chunks?: WhisperChunk[] }
-
-  const chunks = result.chunks ?? []
   const totalMs = (pcm.length / ANALYSIS_RATE) * 1000
 
-  const segments: TranscriptSegment[] = []
+  const run = async (timestamps: 'word' | true) =>
+    (await transcriber(pcm, {
+      return_timestamps: timestamps,
+      chunk_length_s: 30,
+      stride_length_s: 5,
+      task: 'transcribe',
+      ...(options.language ? { language: options.language } : {}),
+    })) as { text?: string; chunks?: WhisperChunk[] }
+
+  let words: TranscriptWord[] = []
+  let segments: TranscriptSegment[] = []
+
+  try {
+    const worded = await run('word')
+    words = toWords(worded.chunks ?? [], totalMs)
+  } catch (err) {
+    // Bazı model/çalışma zamanı bileşimleri hizalama başlıkları olmadan
+    // kelime damgası üretemiyor; parça moduna düşüyoruz.
+    console.warn('Kelime düzeyinde zaman damgası alınamadı', err)
+  }
+
+  if (words.length > 0) {
+    segments = groupWords(words)
+  } else {
+    const plain = await run(true)
+    segments = toSegments(plain.chunks ?? [], totalMs)
+  }
+
+  options.onProgress?.({ stage: 'done', ratio: 1 })
+  return { segments, words }
+}
+
+function toWords(chunks: WhisperChunk[], totalMs: number): TranscriptWord[] {
+  const out: TranscriptWord[] = []
+  for (const chunk of chunks) {
+    const text = (chunk.text ?? '').trim()
+    if (!text) continue
+    const [start, end] = chunk.timestamp
+    if (typeof start !== 'number') continue
+    const startMs = Math.max(0, start * 1000)
+    const endMs = Math.min(totalMs, typeof end === 'number' ? end * 1000 : startMs + 200)
+    out.push({ startMs, endMs: Math.max(endMs, startMs + 40), text })
+  }
+  return out
+}
+
+function toSegments(chunks: WhisperChunk[], totalMs: number): TranscriptSegment[] {
+  const out: TranscriptSegment[] = []
   for (const chunk of chunks) {
     const text = (chunk.text ?? '').trim()
     if (!text) continue
@@ -153,11 +223,33 @@ export async function transcribe(
     // Whisper son parçanın bitişini bazen null bırakıyor; klip sonuna dayıyoruz
     const endMs = Math.min(totalMs, typeof end === 'number' ? end * 1000 : totalMs)
     if (endMs - startMs < 120) continue
-    segments.push({ startMs, endMs, text })
+    out.push({ startMs, endMs, text })
   }
+  return out
+}
 
-  options.onProgress?.({ stage: 'done', ratio: 1 })
-  return segments
+/** Kelimeleri cümle sonu noktalaması ve uzun duraklara göre gruplar. */
+function groupWords(words: TranscriptWord[], gapMs = 500): TranscriptSegment[] {
+  const out: TranscriptSegment[] = []
+  let current: TranscriptWord[] = []
+  const flush = () => {
+    if (current.length === 0) return
+    out.push({
+      startMs: current[0].startMs,
+      endMs: current[current.length - 1].endMs,
+      text: current.map((w) => w.text).join(' ').replace(/\s+([,.!?;:])/g, '$1'),
+    })
+    current = []
+  }
+  for (let i = 0; i < words.length; i++) {
+    current.push(words[i])
+    const next = words[i + 1]
+    const endsSentence = /[.!?…]$/.test(words[i].text)
+    const bigGap = next ? next.startMs - words[i].endMs > gapMs : false
+    if (endsSentence || bigGap) flush()
+  }
+  flush()
+  return out
 }
 
 /** Bir metni, zaman aralığı en çok örtüşen replikle eşleştirir. */

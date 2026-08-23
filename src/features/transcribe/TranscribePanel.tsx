@@ -1,12 +1,13 @@
 import { useCallback, useRef, useState } from 'react'
 import type { Pack, PackLine } from '../../lib/pack.ts'
 import { buildLinesFromTranscript, fillLineTexts } from './apply.ts'
+import { ANALYSIS_RATE } from '../../lib/audio/resample.ts'
 import {
   DEFAULT_MODEL,
   transcribe,
   WHISPER_MODELS,
   type TranscribeProgress,
-  type TranscriptSegment,
+  type TranscriptResult,
 } from './whisper.ts'
 import { useT, type Translate } from '../../i18n/index.tsx'
 import type { MessageKey } from '../../i18n/messages.ts'
@@ -41,7 +42,7 @@ export function TranscribePanel({ pack, pcm, onApply }: Props) {
   const [model, setModel] = useState<string>(DEFAULT_MODEL)
   const [language, setLanguage] = useState('')
   const [progress, setProgress] = useState<TranscribeProgress | null>(null)
-  const [segments, setSegments] = useState<TranscriptSegment[] | null>(null)
+  const [result, setResult] = useState<TranscriptResult | null>(null)
   const [error, setError] = useState<string | null>(null)
   const runningRef = useRef(false)
 
@@ -49,16 +50,16 @@ export function TranscribePanel({ pack, pcm, onApply }: Props) {
     if (runningRef.current) return
     runningRef.current = true
     setError(null)
-    setSegments(null)
+    setResult(null)
     setProgress({ stage: t('tx.starting'), ratio: -1 })
     try {
-      const result = await transcribe(pcm, {
+      const out = await transcribe(pcm, {
         model,
         language: language || undefined,
         onProgress: (p) => setProgress({ ...p, stage: translateStage(p.stage, t, p.file) }),
       })
-      setSegments(result)
-      if (result.length === 0) setError(t('tx.noSpeech'))
+      setResult(out)
+      if (out.segments.length === 0) setError(t('tx.noSpeech'))
     } catch (err) {
       console.error(err)
       setError(err instanceof Error ? err.message : String(err))
@@ -68,7 +69,12 @@ export function TranscribePanel({ pack, pcm, onApply }: Props) {
     }
   }, [pcm, model, language, t])
 
-  const totalText = segments?.map((s) => s.text).join(' ') ?? ''
+  const clipSeconds = pcm.length / ANALYSIS_RATE
+  const speed = WHISPER_MODELS.find((m) => m.id === model)?.speed ?? 1
+  const estimateMin = Math.max(1, Math.round((clipSeconds * speed) / 60))
+
+  const segments = result?.segments ?? []
+  const totalText = segments.map((s) => s.text).join(' ')
 
   return (
     <div className="card" style={{ padding: 16 }}>
@@ -105,6 +111,12 @@ export function TranscribePanel({ pack, pcm, onApply }: Props) {
         </label>
       </div>
 
+      {!progress && clipSeconds > 60 && (
+        <div className="faint" style={{ fontSize: 12, marginTop: 8 }}>
+          {t('tx.estimate', { min: estimateMin })}
+        </div>
+      )}
+
       {progress && (
         <div style={{ marginTop: 12 }}>
           <div className="progress">
@@ -128,7 +140,7 @@ export function TranscribePanel({ pack, pcm, onApply }: Props) {
         </div>
       )}
 
-      {segments && segments.length > 0 && (
+      {result && segments.length > 0 && (
         <>
           <div className="faint" style={{ fontSize: 12, margin: '14px 0 6px' }}>
             {t('tx.foundParts', { n: segments.length })}
@@ -156,7 +168,7 @@ export function TranscribePanel({ pack, pcm, onApply }: Props) {
           <div className="row" style={{ marginTop: 12 }}>
             <button
               className="btn btn-sm"
-              onClick={() => onApply(fillLineTexts(pack.lines, segments))}
+              onClick={() => onApply(fillLineTexts(pack.lines, result))}
               title={t('tx.fillTextsTitle')}
             >
               {t('tx.fillTexts')}
@@ -164,7 +176,7 @@ export function TranscribePanel({ pack, pcm, onApply }: Props) {
             <button
               className="btn btn-primary btn-sm"
               onClick={() =>
-                onApply(buildLinesFromTranscript(pcm, segments, pack.characters, pack.durationMs))
+                onApply(buildLinesFromTranscript(pcm, result, pack.characters, pack.durationMs))
               }
               title={t('tx.rebuildTitle')}
             >

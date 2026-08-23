@@ -121,9 +121,22 @@ clips, type the line texts by hand in the Studio.
 
 **Timestamps are not line boundaries.** Whisper returns contiguous spans that
 cover the whole audio: on the demo clip its first chunk claims "0.00–5.44" while
-the speech actually runs 1.00–4.35. So boundaries always come from the
-energy-based `segmentLines`, and Whisper only supplies text; the two are matched
-by overlap (`src/features/transcribe/apply.ts`).
+the speech actually runs 1.00–4.35. Boundaries therefore always come from the
+energy-based `segmentLines`; Whisper only supplies text.
+
+**Text is placed word by word.** Giving each line "the chunk it overlaps most"
+wrote the *same* text into every line a long chunk spanned — the duplicates you
+would see on a dense scene. Placement now uses word-level timestamps: each word
+lands in exactly one line, chosen by its own midpoint, so duplication is
+structurally impossible. This needs a model exported with cross attentions —
+the plain `onnx-community/whisper-base` fails with "Model outputs must contain
+cross attentions", which is why the `_timestamped` variants are the default.
+If a model cannot produce word timings, the code falls back to a greedy
+one-to-one chunk assignment that also never reuses a chunk
+(`src/features/transcribe/apply.ts`).
+
+Speed is roughly real time for `base` on WASM (14.9 s for a 14.5 s clip, warm),
+so the panel shows an estimate before you start on anything over a minute.
 
 > - `q8` quantisation cannot create a session on the current onnxruntime-web;
 >   the default is `q4`.
@@ -147,7 +160,10 @@ layer unaware of language.
 - ffmpeg.wasm's core is ~32 MB. It is copied into `public/ffmpeg/` after
   `npm install` (`scripts/ffmpeg-kopyala.mjs`), kept out of the repo, and only
   downloaded on the first export.
-- Studio upload limits: 3 minutes / 150 MB (browser memory).
+- Studio upload limits: 10 minutes / 500 MB. Editing stays responsive, but past
+  about five minutes the MP4 export can get slow or run out of memory — the whole
+  mix is rendered in an `OfflineAudioContext` before ffmpeg.wasm sees it. The app
+  warns you at that point rather than blocking.
 
 ## Deploying
 

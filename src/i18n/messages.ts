@@ -124,7 +124,7 @@ const tr = {
   'studio.saved': '✓ Kaydedildi',
   'studio.toDubbing': 'Seslendirmeye geç →',
   'studio.dropTitle': 'MP4 dosyanı buraya bırak',
-  'studio.dropHint': 'veya seçmek için tıkla · en fazla 3 dakika, 150 MB',
+  'studio.dropHint': 'veya seçmek için tıkla · en fazla 10 dakika, 500 MB',
   'studio.dropPrivacy': 'Dosya cihazından çıkmıyor — her şey tarayıcıda işleniyor.',
   'studio.lines': 'Replikler',
   'studio.addLine': '+ ekle',
@@ -143,8 +143,10 @@ const tr = {
   'studio.findingLines': 'Replikler bulunuyor…',
   'studio.saving': 'Kaydediliyor…',
   'studio.savedMsg': 'Kaydedildi.',
-  'studio.tooBig': 'Dosya çok büyük ({mb} MB). Sınır 150 MB.',
-  'studio.tooLong': 'Video 3 dakikadan uzun. Tarayıcıda işlemek için daha kısa bir klip kullan.',
+  'studio.tooBig': 'Dosya çok büyük ({mb} MB). Sınır 500 MB.',
+  'studio.tooLong': 'Video 10 dakikadan uzun. Tarayıcıda işlemek için daha kısa bir klip kullan.',
+  'studio.heavyWarning':
+    'Klip 5 dakikadan uzun: düzenleme sorunsuz ama MP4 dışa aktarma yavaş olabilir ya da bellek yetmeyebilir.',
   'studio.unreadable': "Video okunamadı. MP4 (H.264 + AAC) bir dosya olduğundan emin ol.",
   'studio.foundLines':
     '{n} replik bulundu. Sınırları sürükleyerek düzeltebilir, metinleri yazabilirsin.',
@@ -179,6 +181,7 @@ const tr = {
   'tx.stage.analyzing': 'ses çözümleniyor',
   'tx.stage.done': 'bitti',
   'tx.slowHint': ' — bu biraz sürebilir',
+  'tx.estimate': 'Bu klip için tahminen ~{min} dk',
 
   'mic.denied':
     'Mikrofon izni reddedildi. Tarayıcı adres çubuğundaki kilit simgesinden açabilirsin.',
@@ -304,7 +307,7 @@ const en: Messages = {
   'studio.saved': '✓ Saved',
   'studio.toDubbing': 'Go to dubbing →',
   'studio.dropTitle': 'Drop your MP4 here',
-  'studio.dropHint': 'or click to choose · up to 3 minutes, 150 MB',
+  'studio.dropHint': 'or click to choose · up to 10 minutes, 500 MB',
   'studio.dropPrivacy': 'The file never leaves your device — everything runs in the browser.',
   'studio.lines': 'Lines',
   'studio.addLine': '+ add',
@@ -323,8 +326,10 @@ const en: Messages = {
   'studio.findingLines': 'Finding lines…',
   'studio.saving': 'Saving…',
   'studio.savedMsg': 'Saved.',
-  'studio.tooBig': 'File too large ({mb} MB). The limit is 150 MB.',
-  'studio.tooLong': 'The video is longer than 3 minutes. Use a shorter clip for in-browser work.',
+  'studio.tooBig': 'File too large ({mb} MB). The limit is 500 MB.',
+  'studio.tooLong': 'The video is longer than 10 minutes. Use a shorter clip for in-browser work.',
+  'studio.heavyWarning':
+    'Over 5 minutes: editing is fine, but the MP4 export may be slow or run out of memory.',
   'studio.unreadable': "Couldn't read the video. Make sure it's an MP4 (H.264 + AAC).",
   'studio.foundLines': 'Found {n} lines. Drag the boundaries to adjust and type the text.',
   'studio.noLinesFound': 'No lines detected automatically — add them by hand below.',
@@ -358,6 +363,7 @@ const en: Messages = {
   'tx.stage.analyzing': 'analysing audio',
   'tx.stage.done': 'done',
   'tx.slowHint': ' — this can take a while',
+  'tx.estimate': 'Roughly ~{min} min for this clip',
 
   'mic.denied': 'Microphone permission denied. You can allow it from the lock icon in the address bar.',
   'mic.unavailable': 'Could not access the microphone. Another app may be using it.',

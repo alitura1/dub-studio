@@ -121,8 +121,21 @@ metinlerini Studio'da elle yazmak gerekiyor.
 **Zaman damgaları replik sınırı değil.** Whisper sesi baştan sona kaplayan bitişik
 aralıklar döndürüyor: demo klipte ilk parçaya "0.00–5.44" diyor, oysa konuşma
 1.00'da başlayıp 4.35'te bitiyor. Bu yüzden sınırlar her zaman enerji tabanlı
-`segmentLines`'tan, metinler Whisper'dan alınıp örtüşmeye göre eşleştiriliyor
-(`src/features/transcribe/apply.ts`).
+`segmentLines`'tan geliyor; Whisper yalnızca metni sağlıyor.
+
+**Metin kelime kelime yerleştiriliyor.** Her repliğe "en çok örtüştüğü parça"yı
+vermek, uzun bir parça birkaç repliği kapsadığında aynı metni hepsine yazıyordu —
+yoğun sahnelerde gördüğün tekrarların sebebi buydu. Artık dağıtım kelime düzeyinde:
+her kelime kendi orta noktasına göre *tek bir* repliğe düşüyor, tekrar üretmek
+yapısal olarak imkânsız. Bunun için modelin cross-attention ile derlenmiş olması
+gerekiyor; düz `onnx-community/whisper-base` "Model outputs must contain cross
+attentions" hatası veriyor, bu yüzden varsayılan `_timestamped` varyantları.
+Kelime damgası üretilemezse, parçaları birebir dağıtan ve hiçbir parçayı iki kez
+kullanmayan yedek yola düşülüyor (`src/features/transcribe/apply.ts`).
+
+Hız WASM üzerinde `base` için kabaca gerçek zaman (14.5 sn'lik klip ısınmış hâlde
+14.9 sn), bu yüzden bir dakikadan uzun kliplerde panel önceden süre tahmini
+gösteriyor.
 
 > - `q8` kuantizasyonu mevcut onnxruntime-web sürümünde oturum açamıyor;
 >   varsayılan `q4`.
@@ -139,7 +152,10 @@ aralıklar döndürüyor: demo klipte ilk parçaya "0.00–5.44" diyor, oysa kon
 - ffmpeg.wasm çekirdeği ~32 MB. `public/ffmpeg/` altına `npm install` sonrası
   kopyalanıyor (`scripts/ffmpeg-kopyala.mjs`), repoda tutulmuyor, ve yalnızca ilk
   dışa aktarmada indiriliyor.
-- Studio'da yüklenen video sınırları: 3 dakika / 150 MB (tarayıcı belleği).
+- Studio'da yüklenen video sınırları: 10 dakika / 500 MB. Düzenleme akıcı kalıyor
+  ama yaklaşık beş dakikadan sonra MP4 dışa aktarma yavaşlayabilir ya da bellek
+  yetmeyebilir — miksin tamamı ffmpeg.wasm'a gitmeden önce `OfflineAudioContext`
+  içinde üretiliyor. Uygulama engellemek yerine bu noktada uyarıyor.
 
 ## Diller
 
