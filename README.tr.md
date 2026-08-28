@@ -100,25 +100,69 @@ Repliğin başladığı an hem `requestAnimationFrame` hem de bir zamanlayıcıy
 işaretleniyor: sekme arka plana alındığında rAF duruyor ama video oynamaya devam
 ediyor; eskiden bu durumda kayıt alınıyor ama hizalaması kayboluyordu.
 
-**Sen konuşurken orijinal ses** üç moddan biri:
+**Sen konuşurken orijinal ses** dört moddan biri:
 
-- `Tamamen sustur` (varsayılan) — replik boyunca orijinal ses kesilir
-- `Sesi bastır, müziği koru` — stereo merkez iptali (L−R); diyalog ortada olduğu
-  için kaybolur, müzik ve efektler kalır. Kaynak dual-mono ise uygulanamaz,
-  otomatik olarak susturmaya düşer ve uyarı gösterilir
+- `Karakterin sesini sil, müziği koru` (varsa varsayılan) — paket üretilirken
+  ayrılmış gerçek arka plan parçası çalınır. Diğer üçü yaklaşıklama, bu değil.
+  Müziği baskın bir klipte ölçüldü: orijinal replik −22.6 dB, yerine geçen parça
+  −33.4 dB, ki bu müziğin replikler arasında tuttuğu seviye (−34.6 dB). Whisper
+  arka plan parçasında hiç konuşma bulamıyor
+- `Tamamen sustur` — orijinal kesilir ama müzik ve ortam da gider
+- `Sesi bastır, müziği koru` — stereo merkez iptali (L−R). Dual-mono kaynakta
+  uygulanamaz, uyarıyla susturmaya düşer
 - `Sadece kıs` — orijinal %12 seviyede altta duyulur
 
-## Transkripsiyon
+Arka plan parçası **kayıt sırasında da** çalıyor: sessizliğe değil müziğin
+üstüne oynuyorsun. İçinde diyalog olmadığı için mikrofona sızma da yok.
 
-Whisper (transformers.js) tarayıcıda çalışıyor; ses hiçbir yere gönderilmiyor,
-yalnızca model dosyaları huggingface.co'dan bir kez indirilip önbelleğe alınıyor.
+**♪ Sadece sesi dinle** aynı miksi üretip videosuz çalıyor — dublajı kontrol
+ederken önemli olan görüntü değil, repliğin yerine oturup oturmadığı.
+
+## Ayrıştırma ve transkripsiyon
+
+Paketler yerel olarak üretildiği için ağır iş tarayıcıda değil orada yapılıyor.
+`demucs --two-stems=vocals` klibi diyalog ve arka plan diye ayırıyor; CLI arka
+planı `background.m4a`, ayrılmış diyaloğu da skorlama referansı olarak saklıyor.
+Ardından `faster-whisper` kelime damgalarıyla yazıya döküyor ve replikler
+bunlardan kuruluyor.
+
+İkisi de opsiyonel: `demucs` yoksa paket yine kuruluyor (yalnızca yaklaşık
+modlar), `faster-whisper` yoksa replik metinleri boş kalıyor.
+
+```bash
+pip install demucs faster-whisper
+```
+
+25 saniyelik müziği baskın bir klipte, CPU'da ölçüldü: ayrıştırma 43 sn,
+transkripsiyon 12 sn, indirme ve kodlama dahil tüm paket üretimi ~2.5 dakika.
+İlk çalıştırma ayrıca demucs modelini indiriyor (~4 dk).
+
+> Ayrıştırmanın iki yerde beklenenden az fayda ettiği ölçüldü. Enerji tabanlı
+> replik sınırlarını *kötüleştirdi*, ve ayrılmış diyaloğu yazıya dökmek tam
+> miksle neredeyse aynı metni verdi — transkript kazancı ayrıştırmadan değil
+> daha büyük modelden geliyordu. Asıl işini yaptığı yer belli: dublajının
+> altından orijinal sesi çekmek.
+
+### Tarayıcı tarafı
+
+Whisper (transformers.js) kendi yüklediğin videolar için tarayıcıda çalışmaya
+devam ediyor; ses hiçbir yere gönderilmiyor, yalnızca model dosyaları
+huggingface.co'dan bir kez indirilip önbelleğe alınıyor.
 
 Net kayıtta sonuç birebir doğru — demo paketin beş repliği de kelimesi kelimesine
 çıkıyor. **Arka planında yüksek müzik olan film kliplerinde güvenilmez**; Whisper
 konuşma yerine uydurma üretiyor ("I'm sorry." gibi). Bu klipler için replik
 metinlerini Studio'da elle yazmak gerekiyor.
 
-**Zaman damgaları replik sınırı değil.** Whisper sesi baştan sona kaplayan bitişik
+**Replikler kelime damgalarından kuruluyor, sesin enerjisinden değil.** Bu
+varsayılmadı, ölçüldü: müziği baskın bir klipte enerji tabanlı bölme 4-6 saniyelik
+bloklar üretti, çünkü eşiğini gürültü tabanından hesaplıyor ve müzik o tabanı
+yukarı çekiyor. Aynı seste Whisper'ın kelime damgaları gerçek replikleri verdi
+("Don't come any closer." 2.14-2.90). Gruplar cümle sonu noktalamasında ve
+duraklarda bölünüyor; dört saniyeyi hâlâ aşan grup en geniş iç durağından tekrar
+bölünüyor — 5.5 saniyelik bir replik tek nefeste seslendirilemiyor.
+
+**Parça damgaları replik sınırı değil.** Whisper sesi baştan sona kaplayan bitişik
 aralıklar döndürüyor: demo klipte ilk parçaya "0.00–5.44" diyor, oysa konuşma
 1.00'da başlayıp 4.35'te bitiyor. Bu yüzden sınırlar her zaman enerji tabanlı
 `segmentLines`'tan geliyor; Whisper yalnızca metni sağlıyor.

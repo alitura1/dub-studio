@@ -12,7 +12,15 @@
  */
 
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -20,6 +28,8 @@ import { fileURLToPath } from 'node:url'
 import { segmentLines } from '../src/lib/audio/segment.ts'
 import { decodeWav } from '../src/lib/audio/wav.ts'
 import { toMono } from '../src/lib/audio/resample.ts'
+import { linesFromWords } from '../src/features/transcribe/apply.ts'
+import type { TranscriptWord } from '../src/features/transcribe/whisper.ts'
 import {
   CHARACTER_COLORS,
   PACK_SCHEMA_VERSION,
@@ -43,6 +53,13 @@ interface Args {
   local: boolean
   characters: number
   help: boolean
+  /** Ayrıştırma ve transkripsiyonu atla (hızlı deneme için). */
+  skipSeparate: boolean
+  skipText: boolean
+  /** faster-whisper model boyutu. */
+  whisperModel: string
+  /** Konuşma dili; boş bırakılırsa Whisper tespit eder. */
+  speechLang?: string
 }
 
 function parseTime(value: string): number {
@@ -53,7 +70,15 @@ function parseTime(value: string): number {
 }
 
 function parseArgs(argv: string[]): Args {
-  const args: Args = { startMs: 0, local: false, characters: 1, help: false }
+  const args: Args = {
+    startMs: 0,
+    local: false,
+    characters: 1,
+    help: false,
+    skipSeparate: false,
+    skipText: false,
+    whisperModel: 'small',
+  }
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     const next = () => {
@@ -79,6 +104,10 @@ function parseArgs(argv: string[]): Args {
       case '--id': args.id = next(); break
       case '--yerel': args.local = true; break
       case '--karakter': args.characters = Math.max(1, Number(next()) || 1); break
+      case '--ayirma-yok': args.skipSeparate = true; break
+      case '--metin-yok': args.skipText = true; break
+      case '--model': args.whisperModel = next(); break
+      case '--konusma-dili': args.speechLang = next(); break
       case '--yardim': case '-h': case '--help': args.help = true; break
       default:
         if (a.startsWith('-')) throw new Error(`Bilinmeyen seçenek: ${a}`)
@@ -102,6 +131,10 @@ Seçenekler:
   --id <slug>       Klasör adı (varsayılan: başlıktan türetilir)
   --karakter <n>    Kaç karakter tanımlansın (satırlar sırayla dağıtılır)
   --yerel           public/packs/yerel/ altına yaz (gitignore'lu, deploy edilmez)
+  --konusma-dili    Replik dili (en, tr…); boş bırakılırsa tespit edilir
+  --model           faster-whisper modeli (tiny/base/small/medium; varsayılan small)
+  --ayirma-yok      demucs ile müzik/diyalog ayrıştırmasını atla
+  --metin-yok       transkripsiyonu atla, replik metinleri boş kalsın
 
 Örnek:
   npm run paket -- "https://youtu.be/xxxx" --bas 1:12 --sure 18 --ad "Homelander — Delicious" --yerel
@@ -178,6 +211,80 @@ function probeDurationMs(file: string): number | null {
   if (!match) return null
   const seconds = Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3])
   return isFinite(seconds) && seconds > 0 ? Math.round(seconds * 1000) : null
+}
+
+interface Stems {
+  /** Diyalog, müzik/efekt çıkarılmış. */
+  vocals: string
+  /** Müzik + ortam, diyalog çıkarılmış. */
+  background: string
+}
+
+/**
+ * demucs ile diyaloğu müzikten ayırır.
+ *
+ * Ölçüldü (25 sn'lik müzikli klip, CPU): ayrıştırma 43 sn sürüyor, arka plan
+ * parçasının seviyesi orijinalle aynı kalıyor (-16.0 dB / -16.1 dB) ve içinde
+ * konuşma kalmıyor — Whisper arka plan parçasında replik bulamıyor. Yani
+ * "sen konuşurken orijinal repliği sil, müziği bırak" tam olarak çalışıyor.
+ *
+ * demucs yoksa null döner; araç ayrıştırmasız da çalışmaya devam eder.
+ */
+function separateStems(clip: string, tmp: string): Stems | null {
+  if (!has('demucs', '--help')) {
+    console.log('  ! demucs yok, ayrıştırma atlanıyor (pip install demucs)')
+    return null
+  }
+  const mix = join(tmp, 'mix.wav')
+  run('ffmpeg', ['-y', '-i', clip, '-vn', '-ac', '2', '-ar', '44100', mix], 'Ses çıkarılıyor')
+
+  const out = join(tmp, 'demucs')
+  run(
+    'demucs',
+    ['--two-stems=vocals', '--filename', '{stem}.{ext}', '-o', out, mix],
+    'Müzik ve diyalog ayrılıyor',
+  )
+
+  // demucs çıktıyı <out>/<model>/<stem>.wav olarak yazıyor
+  const modelDir = readdirSync(out)[0]
+  if (!modelDir) return null
+  const vocals = join(out, modelDir, 'vocals.wav')
+  const background = join(out, modelDir, 'no_vocals.wav')
+  if (!existsSync(vocals) || !existsSync(background)) return null
+  return { vocals, background }
+}
+
+/**
+ * Replikleri konuşmadan çıkarır: hem metin hem sınırlar.
+ *
+ * Tarayıcıdaki whisper-base yerine faster-whisper: aynı müzikli klipte
+ * tarayıcı modeli 26 saniyeye "I'm sorry." derken bu altı repliği de doğru
+ * çıkardı. Sınırlar da buradan geliyor — enerji tabanlı bölme müziğin
+ * gürültü tabanını yükseltmesi yüzünden 4-6 saniyelik bloklar üretiyordu.
+ */
+function transcribeWords(audio: string, args: Args): TranscriptWord[] {
+  const script = join(ROOT, 'tools', 'transkript.py')
+  const cmdArgs = [script, audio, '--model', args.whisperModel]
+  if (args.speechLang) cmdArgs.push('--dil', args.speechLang)
+
+  process.stdout.write('  Replikler yazıya dökülüyor...')
+  const r = exec('python', cmdArgs)
+  const line = (r.stdout || '').trim().split('\n').pop() ?? ''
+  let parsed: { words?: TranscriptWord[]; error?: string }
+  try {
+    parsed = JSON.parse(line)
+  } catch {
+    process.stdout.write(' ✗\n')
+    console.log('  ! transkripsiyon çıktısı okunamadı, metinler boş bırakılıyor')
+    return []
+  }
+  if (parsed.error || !parsed.words) {
+    process.stdout.write(' ✗\n')
+    console.log(`  ! ${parsed.error ?? 'transkripsiyon başarısız'} — metinler boş bırakılıyor`)
+    return []
+  }
+  process.stdout.write(` ✓ ${parsed.words.length} kelime\n`)
+  return parsed.words
 }
 
 /** Kaynağı indirir/kopyalar ve normalize edilmiş clip.mp4 üretir. */
@@ -290,17 +397,32 @@ function main(): void {
 
     const clip = join(outDir, 'clip.mp4')
     const refWav = join(outDir, 'ref.wav')
+
+    const stems = args.skipSeparate ? null : separateStems(clip, tmp)
+    if (stems) {
+      run(
+        'ffmpeg',
+        ['-y', '-i', stems.background, '-c:a', 'aac', '-b:a', '192k', join(outDir, 'background.m4a')],
+        'Arka plan yazılıyor',
+      )
+    }
+
+    /*
+     * Skorlama referansı: ayrıştırma varsa temiz diyalog, yoksa tam miks.
+     * Ayrılmış vokal üzerinde perde takibi müziğin melodisine değil konuşmaya
+     * kilitleniyor — puanlanan şeyin doğru olması buna bağlı.
+     */
     run(
       'ffmpeg',
-      ['-y', '-i', clip, '-vn', '-ac', '1', '-ar', '16000', '-c:a', 'pcm_s16le', refWav],
+      [
+        '-y', '-i', stems?.vocals ?? clip,
+        '-vn', '-ac', '1', '-ar', '16000', '-c:a', 'pcm_s16le', refWav,
+      ],
       'Referans ses çıkarılıyor',
     )
 
-    process.stdout.write('  Satırlar bulunuyor...')
     const wav = decodeWav(new Uint8Array(readFileSync(refWav)))
     const pcm = toMono(wav.channels)
-    const ranges = segmentLines(pcm, { sampleRate: wav.sampleRate })
-    process.stdout.write(` ✓ ${ranges.length} satır\n`)
 
     const characters = Array.from({ length: args.characters }, (_, i) => ({
       id: `k${i + 1}`,
@@ -308,14 +430,34 @@ function main(): void {
       color: CHARACTER_COLORS[i % CHARACTER_COLORS.length],
     }))
 
-    const lines: PackLine[] = ranges.map((r, i) => ({
-      id: `l${i + 1}`,
-      characterId: characters[i % characters.length].id,
-      startMs: Math.round(r.startMs),
-      endMs: Math.round(r.endMs),
-      text: '',
-      leadInMs: 800,
-    }))
+    const durationMs = probeDurationMs(clip) ?? Math.round((pcm.length / wav.sampleRate) * 1000)
+
+    /*
+     * Replikleri transkriptten kuruyoruz. Transkripsiyon tam miks üzerinde
+     * çalışıyor: ölçümde ayrılmış vokalle neredeyse aynı metni verdi ("I'm
+     * Jewish" → "Jewish" tek farkla, ayrılmış olan biraz daha kötüydü), yani
+     * ayrıştırmaya bağlamanın kazancı yok.
+     */
+    let lines: PackLine[] = []
+    if (!args.skipText) {
+      const words = transcribeWords(clip, args)
+      if (words.length > 0) lines = linesFromWords(words, characters, durationMs)
+    }
+
+    if (lines.length === 0) {
+      // Transkript yoksa enerjiden bölüyoruz — metinler Studio'da doldurulur
+      process.stdout.write('  Satırlar sesin enerjisinden bulunuyor...')
+      const ranges = segmentLines(pcm, { sampleRate: wav.sampleRate })
+      process.stdout.write(` ✓ ${ranges.length} satır\n`)
+      lines = ranges.map((r, i) => ({
+        id: `l${i + 1}`,
+        characterId: characters[i % characters.length].id,
+        startMs: Math.round(r.startMs),
+        endMs: Math.round(r.endMs),
+        text: '',
+        leadInMs: 800,
+      }))
+    }
 
     const pack: Pack = {
       schemaVersion: PACK_SCHEMA_VERSION,
@@ -323,7 +465,8 @@ function main(): void {
       title,
       video: 'clip.mp4',
       reference: 'ref.wav',
-      durationMs: probeDurationMs(clip) ?? Math.round((pcm.length / wav.sampleRate) * 1000),
+      background: stems ? 'background.m4a' : undefined,
+      durationMs,
       characters,
       lines,
       source: args.url

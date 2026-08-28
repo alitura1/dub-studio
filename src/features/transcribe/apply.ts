@@ -114,8 +114,87 @@ export function fillLineTexts(lines: PackLine[], result: TranscriptResult): Pack
 }
 
 /**
- * Replikleri sıfırdan kurar: sınırlar sesin enerjisinden, metinler transkriptten.
- * Karakterler sırayla dağıtılır — konuşma sırası genelde dönüşümlü.
+ * Kelime damgalarından doğrudan replik kurar.
+ *
+ * Ölçüm bunu gerektirdi: müziği baskın bir klipte enerji tabanlı bölme
+ * 4-6 saniyelik bloklar üretiyordu (eşik gürültü tabanına göre hesaplandığı
+ * için müzik onu yukarı çekiyor), oysa aynı yerde Whisper'ın kelime damgaları
+ * gerçek replikleri veriyordu: "Don't come any closer." 2.14-2.90.
+ *
+ * Kelimeler `gapMs`'ten uzun sessizliklerde bölünüyor; cümle sonu noktalaması
+ * da bölme sebebi, böylece iki cümle tek repliğe sıkışmıyor.
+ */
+export function linesFromWords(
+  words: TranscriptWord[],
+  characters: PackCharacter[],
+  durationMs: number,
+  gapMs = 450,
+  padMs = 120,
+  maxLineMs = 4000,
+): PackLine[] {
+  const groups: TranscriptWord[][] = []
+  let current: TranscriptWord[] = []
+  for (let i = 0; i < words.length; i++) {
+    current.push(words[i])
+    const next = words[i + 1]
+    const endsSentence = /[.!?…]$/.test(words[i].text)
+    const bigGap = next ? next.startMs - words[i].endMs > gapMs : true
+    if (endsSentence || bigGap) {
+      groups.push(current)
+      current = []
+    }
+  }
+  if (current.length > 0) groups.push(current)
+
+  // Uzun cümleleri en geniş iç duraktan böl. Noktalama arasında nefes almadan
+  // giden bir replik (ölçümde 5.5 sn'lik "Life is a precious gift…") tek
+  // seferde seslendirilemiyor; kayıt penceresi de skor da anlamsızlaşıyor.
+  const split = (group: TranscriptWord[]): TranscriptWord[][] => {
+    const span = group[group.length - 1].endMs - group[0].startMs
+    if (span <= maxLineMs || group.length < 4) return [group]
+    let bestIndex = -1
+    let bestGap = -1
+    // Kenarlara çok yakın bölmek işe yaramaz; ortadaki yarıda arıyoruz
+    for (let i = Math.max(1, Math.floor(group.length * 0.25)); i < Math.floor(group.length * 0.75); i++) {
+      const gap = group[i].startMs - group[i - 1].endMs
+      if (gap > bestGap) {
+        bestGap = gap
+        bestIndex = i
+      }
+    }
+    if (bestIndex < 1) return [group]
+    return [...split(group.slice(0, bestIndex)), ...split(group.slice(bestIndex))]
+  }
+  const parts = groups.flatMap(split)
+  groups.length = 0
+  groups.push(...parts)
+
+  const lines = groups.map((group, i) => ({
+    id: `l${i + 1}`,
+    characterId: characters[i % Math.max(1, characters.length)]?.id ?? 'k1',
+    startMs: Math.max(0, Math.round(group[0].startMs - padMs)),
+    endMs: Math.min(durationMs, Math.round(group[group.length - 1].endMs + padMs)),
+    text: joinWords(group),
+    leadInMs: 800,
+  }))
+
+  // Pay eklemek komşuları çakıştırmış olabilir — ortada buluştur
+  for (let i = 1; i < lines.length; i++) {
+    if (lines[i].startMs < lines[i - 1].endMs) {
+      const mid = Math.round((lines[i].startMs + lines[i - 1].endMs) / 2)
+      lines[i - 1].endMs = mid
+      lines[i].startMs = mid
+    }
+  }
+  return lines.filter((l) => l.endMs - l.startMs >= 150)
+}
+
+/**
+ * Replikleri sıfırdan kurar.
+ *
+ * Kelime damgası varsa sınırlar da metin de oradan geliyor (yukarıya bak).
+ * Yoksa enerji tabanlı bölmeye düşülüyor — kelime damgası üretemeyen bir
+ * modelde tek seçenek o.
  */
 export function buildLinesFromTranscript(
   pcm: Float32Array,
@@ -124,6 +203,9 @@ export function buildLinesFromTranscript(
   durationMs: number,
   sampleRate = ANALYSIS_RATE,
 ): PackLine[] {
+  if (result.words.length > 0) {
+    return linesFromWords(result.words, characters, durationMs)
+  }
   const ranges: Range[] = segmentLines(pcm, { sampleRate })
   const source = ranges.length > 0 ? ranges : result.segments
   const texts = textsFor(source, result)

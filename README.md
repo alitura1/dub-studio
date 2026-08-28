@@ -101,25 +101,72 @@ The moment a line starts is marked from a timer as well as from
 `requestAnimationFrame`: rAF is suspended in a background tab while the video
 keeps playing, which used to leave the take recorded but misaligned.
 
-**Original audio while you speak** — three modes:
+**Original audio while you speak** — four modes:
 
-- `Mute completely` (default) — the original is cut for the duration of the line
-- `Suppress voice, keep music` — stereo centre cancellation (L−R); dialogue sits
-  in the centre so it disappears, music and effects survive. Falls back to muting
-  with a warning if the source is dual mono
+- `Remove the character voice, keep the music` (default when available) — plays
+  the real background stem separated at pack build time. The other three are
+  approximations; this one is not. Measured on a music-heavy clip: the original
+  line sits at −22.6 dB, the stem replaces it at −33.4 dB, which is the level the
+  music holds between lines (−34.6 dB). Whisper finds no speech at all in the
+  background stem
+- `Mute completely` — the original is cut, but so are music and ambience
+- `Suppress voice, keep music` — stereo centre cancellation (L−R). Falls back to
+  muting with a warning on dual-mono sources
 - `Just duck it` — the original stays audible underneath at 12%
 
-## Transcription
+The background stem also plays **while you record**, so you perform over the
+music instead of into silence. It contains no dialogue, so nothing leaks into
+the microphone.
 
-Whisper (transformers.js) runs in the browser; audio is never uploaded, only the
-model files are fetched once from huggingface.co and cached.
+**♪ Preview audio** renders the same mix and plays it without the video — when
+you are checking a dub, what matters is whether the line landed, not the picture.
+
+## Separation and transcription
+
+Packs are built locally, so the heavy work happens there rather than in the
+browser. `demucs --two-stems=vocals` splits the clip into dialogue and
+background; the CLI keeps the background as `background.m4a` and the isolated
+dialogue as the scoring reference. `faster-whisper` then transcribes with word
+timestamps, and the lines are built from those.
+
+Both are optional: without `demucs` the pack still builds (approximation modes
+only), and without `faster-whisper` the line texts stay empty for you to type.
+
+```bash
+pip install demucs faster-whisper
+```
+
+Measured on a 25-second music-heavy clip, CPU: separation 43 s, transcription
+12 s, whole pack build about 2.5 minutes including download and encode. The
+first run also downloads the demucs model (~4 min).
+
+> Separation was measured to help less than expected in two places. It made
+> energy-based line boundaries *worse*, and transcribing the isolated dialogue
+> gave essentially the same text as the full mix — the transcription win came
+> from the larger model, not from separation. Where it does deliver is its actual
+> job: taking the original voice out from under your dub.
+
+### In the browser
+
+Whisper (transformers.js) still runs in the browser for videos you upload
+yourself; audio is never uploaded, only the model files are fetched once from
+huggingface.co and cached.
 
 On clean speech the result is word-perfect — all five lines of the demo pack come
 out exactly. **It is unreliable on film clips with loud background music**, where
 Whisper hallucinates instead of transcribing (things like "I'm sorry."). For those
 clips, type the line texts by hand in the Studio.
 
-**Timestamps are not line boundaries.** Whisper returns contiguous spans that
+**Lines come from word timestamps, not from audio energy.** This was measured,
+not assumed: on a music-heavy clip the energy segmenter produced 4-6 second
+blobs, because it derives its threshold from the noise floor and music lifts that
+floor. Whisper's word timings gave the actual lines in the same audio
+("Don't come any closer." 2.14-2.90). Groups are split on sentence-ending
+punctuation and on pauses, and any group still longer than four seconds is split
+again at its widest internal gap — a 5.5-second line cannot be performed in one
+breath.
+
+**Segment timestamps are not line boundaries.** Whisper returns contiguous spans that
 cover the whole audio: on the demo clip its first chunk claims "0.00–5.44" while
 the speech actually runs 1.00–4.35. Boundaries therefore always come from the
 energy-based `segmentLines`; Whisper only supplies text.

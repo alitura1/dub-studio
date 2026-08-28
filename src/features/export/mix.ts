@@ -27,11 +27,17 @@ export interface MixTake {
  *           diyalog neredeyse her zaman tam ortada, müzik ve efektler yanlara
  *           yayılmış olduğu için orijinal replik büyük ölçüde kaybolur,
  *           arka plan yaşamaya devam eder. Mono kaynakta uygulanamaz.
+ * `stems` — paket üretilirken demucs ile ayrılmış gerçek arka plan parçası
+ *           çalınır. Diğer üçü yaklaşıklama, bu değil: ölçümde arka plan
+ *           parçasının seviyesi orijinalle aynı kaldı (-16.0 / -16.1 dB) ve
+ *           içinde konuşma bulunamadı. Yalnızca paket ayrıştırma içeriyorsa.
  */
-export type OriginalMode = 'duck' | 'mute' | 'removeVocals'
+export type OriginalMode = 'stems' | 'duck' | 'mute' | 'removeVocals'
 
 export interface MixOptions {
   original: AudioBuffer
+  /** `stems` modu için ayrıştırılmış arka plan. */
+  background?: AudioBuffer | null
   takes: MixTake[]
   /** Orijinal sese müdahale edilecek aralıklar (replikler). */
   duckRanges: Array<{ startMs: number; endMs: number }>
@@ -100,10 +106,10 @@ export async function renderMix(options: MixOptions): Promise<AudioBuffer> {
   const originalLevel = options.originalLevel ?? 1
   // Kaynak mono ya da dual-mono ise merkez iptali sessizlik üretir;
   // kullanıcıya boş bir parça vermektense susturmaya düşüyoruz.
-  const mode: OriginalMode =
-    options.originalMode === 'removeVocals' && sideEnergyDb(original) < SIDE_ENERGY_FLOOR_DB
-      ? 'mute'
-      : options.originalMode ?? 'mute'
+  let mode: OriginalMode = options.originalMode ?? 'mute'
+  // İstenen mod bu kaynakta uygulanamıyorsa sessizce susturmaya düşüyoruz
+  if (mode === 'stems' && !options.background) mode = 'mute'
+  if (mode === 'removeVocals' && sideEnergyDb(original) < SIDE_ENERGY_FLOOR_DB) mode = 'mute'
   const duckLevel = mode === 'duck' ? options.duckLevel ?? 0.12 : 0
 
   const sampleRate = original.sampleRate
@@ -135,6 +141,17 @@ export async function renderMix(options: MixOptions): Promise<AudioBuffer> {
   automate(mainGain, originalLevel, duckLevel)
   originalSource.connect(mainGain).connect(ctx.destination)
   originalSource.start(0)
+
+  if (mode === 'stems' && options.background) {
+    // Ana yolun tam tersi: replik dışında sessiz, replik boyunca açık.
+    // Aynı zaman ekseninde başladığı için ayrıca hizalama gerekmiyor.
+    const bgSource = ctx.createBufferSource()
+    bgSource.buffer = options.background
+    const bgGain = ctx.createGain()
+    automate(bgGain, 0, originalLevel)
+    bgSource.connect(bgGain).connect(ctx.destination)
+    bgSource.start(0)
+  }
 
   if (mode === 'removeVocals') {
     // İkinci bir kaynak: aynı tampon, merkezi iptal edilmiş hâli. Replik

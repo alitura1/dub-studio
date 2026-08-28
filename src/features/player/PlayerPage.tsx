@@ -54,6 +54,34 @@ export function PlayerPage({ packId, local, project, onNavigate }: Props) {
   const [busy, setBusy] = useState<string | null>(null)
   // Dışa aktarmayla aynı seçim: önizlemede duyduğun, indirdiğinde de o olsun
   const [originalMode, setOriginalMode] = useState<OriginalMode>('mute')
+  /** Ayrıştırılmış arka planı replik boyunca çalan kaynak (kayıt + önizleme). */
+  const bgSourceRef = useRef<AudioBufferSourceNode | null>(null)
+
+  const stopBackground = useCallback(() => {
+    bgSourceRef.current?.stop()
+    bgSourceRef.current = null
+  }, [])
+
+  /**
+   * Arka planı verilen video anından itibaren çalar.
+   *
+   * Kayıt sırasında replik boyunca ortam tamamen susuyordu; oysa dublaj tam
+   * olarak müziğin üstüne oynamak demek. Ayrıştırılmış parçada orijinal replik
+   * olmadığı için mikrofona sızma riski de yok.
+   */
+  const startBackground = useCallback(
+    (fromMs: number) => {
+      if (!data?.background) return
+      stopBackground()
+      const ctx = audioContext()
+      const source = ctx.createBufferSource()
+      source.buffer = data.background
+      source.connect(ctx.destination)
+      source.start(0, Math.max(0, fromMs / 1000))
+      bgSourceRef.current = source
+    },
+    [data, stopBackground],
+  )
 
   /**
    * Videonun sesini Web Audio'dan geçiren düğümler.
@@ -84,6 +112,11 @@ export function PlayerPage({ packId, local, project, onNavigate }: Props) {
   const pack = data?.pack
   const lines = pack?.lines ?? []
   const selected = lines.find((l) => l.id === selectedId) ?? lines[0] ?? null
+
+  useEffect(() => {
+    // Gerçek ayrıştırma varsa varsayılan o olsun: yaklaşıklamalar yedek
+    if (data?.background) setOriginalMode('stems')
+  }, [data])
 
   useEffect(() => {
     if (!pack) return
@@ -128,6 +161,7 @@ export function PlayerPage({ packId, local, project, onNavigate }: Props) {
       const video = videoRef.current
       video?.pause()
       if (video) video.muted = false
+      stopBackground()
       stopLoop()
       setPhase('processing')
       setCountdown(0)
@@ -176,7 +210,7 @@ export function PlayerPage({ packId, local, project, onNavigate }: Props) {
         setPhase('idle')
       }
     },
-    [data, recorder, stopLoop, takes],
+    [data, recorder, stopLoop, takes, stopBackground],
   )
 
   const record = useCallback(
@@ -241,6 +275,8 @@ export function PlayerPage({ packId, local, project, onNavigate }: Props) {
         recorder.markLineStart()
         // Referans sesi mikrofona sızmasın diye replik boyunca susturuyoruz
         if (videoRef.current) videoRef.current.muted = true
+        // …ama müzik devam etsin: dublaj müziğin üstüne oynamaktır
+        startBackground(current.line.startMs)
         setPhase('recording')
       }
 
@@ -280,7 +316,7 @@ export function PlayerPage({ packId, local, project, onNavigate }: Props) {
       }
       rafRef.current = requestAnimationFrame(tick)
     },
-    [data, phase, recorder, finishRecording],
+    [data, phase, recorder, finishRecording, startBackground],
   )
 
   const cancelRecording = useCallback(() => {
@@ -356,19 +392,26 @@ export function PlayerPage({ packId, local, project, onNavigate }: Props) {
       if (!videoRef.current || videoRef.current.paused) {
         playing.forEach((s) => s.stop())
         playing.clear()
+        stopBackground()
         if (graph) {
           graph.main.gain.value = 1
           graph.side.gain.value = 0
         }
         return
       }
-      const t = videoRef.current.currentTime * 1000
+      const t2 = videoRef.current.currentTime * 1000
       // Replik aralığında orijinal sese seçilen moda göre müdahale et
-      const inLine = pack.lines.some((l) => t >= l.startMs && t <= l.endMs && activeTakeFor(l.id))
+      const inLine = pack.lines.some((l) => t2 >= l.startMs && t2 <= l.endMs && activeTakeFor(l.id))
       if (graph) {
         if (!inLine) {
           graph.main.gain.value = 1
           graph.side.gain.value = 0
+          if (bgSourceRef.current) stopBackground()
+        } else if (originalMode === 'stems' && data?.background) {
+          // Orijinali tamamen kes, yerine ayrıştırılmış arka planı koy
+          graph.main.gain.value = 0
+          graph.side.gain.value = 0
+          if (!bgSourceRef.current) startBackground(t2)
         } else if (originalMode === 'duck') {
           graph.main.gain.value = 0.12
           graph.side.gain.value = 0
@@ -385,7 +428,7 @@ export function PlayerPage({ packId, local, project, onNavigate }: Props) {
 
       for (const item of scheduled) {
         const startAt = item.line.startMs - item.take.leadTrimMs
-        if (!fired.has(item.line.id) && t >= startAt && t < startAt + 250) {
+        if (!fired.has(item.line.id) && t2 >= startAt && t2 < startAt + 250) {
           fired.add(item.line.id)
           const src = ctx.createBufferSource()
           src.buffer = item.buffer
@@ -399,7 +442,7 @@ export function PlayerPage({ packId, local, project, onNavigate }: Props) {
     }
     stopLoop()
     rafRef.current = requestAnimationFrame(tick)
-  }, [pack, phase, activeTakeFor, stopLoop, ensureGraph, originalMode])
+  }, [pack, phase, activeTakeFor, stopLoop, ensureGraph, originalMode, data, startBackground, stopBackground])
 
   const removeTake = useCallback(async (take: StoredTake) => {
     await deleteTake(take.key)
@@ -465,12 +508,13 @@ export function PlayerPage({ packId, local, project, onNavigate }: Props) {
   useEffect(
     () => () => {
       stopLoop()
+      stopBackground()
       // Sayfadan ayrılırken bekleyen zaman aşımı tetiklenmesin
       if (sessionRef.current?.deadline) clearTimeout(sessionRef.current.deadline)
       if (sessionRef.current?.markTimer) clearTimeout(sessionRef.current.markTimer)
       sessionRef.current = null
     },
-    [stopLoop],
+    [stopLoop, stopBackground],
   )
 
   if (error) {

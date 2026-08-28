@@ -97,6 +97,11 @@ const tr = {
   'export.recordedCount': '{done}/{total} replik kayıtlı',
   'export.downloadMp4': '↓ MP4 indir',
   'export.audioOnly': '↓ sadece ses',
+  'export.previewAudio': '♪ Sadece sesi dinle',
+  'export.stopAudio': '■ Durdur',
+  'export.mode.stems': 'Karakterin sesini sil, müziği koru',
+  'export.mode.stems.hint':
+    'Paket üretilirken ayrılmış gerçek arka plan parçası — yaklaşıklama değil',
   'export.preparing': 'Hazırlanıyor…',
   'export.needOneTake': 'En az bir repliği kaydettiğinde dışa aktarma açılır.',
   'export.originalLabel': 'Sen konuşurken orijinal ses',
@@ -280,6 +285,11 @@ const en: Messages = {
   'export.recordedCount': '{done}/{total} lines recorded',
   'export.downloadMp4': '↓ Download MP4',
   'export.audioOnly': '↓ audio only',
+  'export.previewAudio': '♪ Preview audio',
+  'export.stopAudio': '■ Stop',
+  'export.mode.stems': 'Remove the character voice, keep the music',
+  'export.mode.stems.hint':
+    'The real background stem separated at pack build time — not an approximation',
   'export.preparing': 'Preparing…',
   'export.needOneTake': 'Record at least one line to enable export.',
   'export.originalLabel': 'Original audio while you speak',

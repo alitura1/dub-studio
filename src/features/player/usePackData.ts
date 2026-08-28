@@ -19,6 +19,11 @@ export interface PackData {
   videoUrl: string
   /** 16 kHz mono, klibin tamamı. */
   refPcm: Float32Array
+  /**
+   * Ayrıştırılmış arka plan (müzik + ortam, diyalog çıkarılmış).
+   * Paket ayrıştırma içermiyorsa null — o zaman yaklaşık modlara düşülür.
+   */
+  background: AudioBuffer | null
   /** Dışa aktarmada ham video baytlarını almak için. */
   fetchVideoBytes: () => Promise<Uint8Array>
 }
@@ -44,6 +49,8 @@ export function usePackData(packId: string, local: boolean, project: boolean) {
           pack: stored.pack,
           videoUrl: objectUrl,
           refPcm,
+          // Kullanıcı projelerinde ayrıştırma yok: demucs paket üretim adımında
+          background: null,
           fetchVideoBytes: async () => new Uint8Array(await stored.video.arrayBuffer()),
         }
       }
@@ -57,10 +64,21 @@ export function usePackData(packId: string, local: boolean, project: boolean) {
       const wav = decodeWav(new Uint8Array(await wavRes.arrayBuffer()))
       const refPcm = resampleLinear(toMono(wav.channels), wav.sampleRate, ANALYSIS_RATE)
 
+      let background: AudioBuffer | null = null
+      if (pack.background) {
+        try {
+          const res = await fetch(base + pack.background)
+          if (res.ok) background = await decodeAudio(await res.arrayBuffer())
+        } catch {
+          // Arka plan olmadan da oynanabilir; yaklaşık modlara düşülür
+        }
+      }
+
       return {
         pack,
         videoUrl,
         refPcm,
+        background,
         fetchVideoBytes: async () => {
           const res = await fetch(videoUrl)
           if (!res.ok) throw new Error(`Video indirilemedi (${res.status})`)

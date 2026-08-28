@@ -38,8 +38,15 @@ export interface Pack {
   title: string
   /** Paket klasörüne göreli video dosyası. */
   video: string
-  /** Paket klasörüne göreli 16 kHz mono referans WAV. */
+  /** Paket klasörüne göreli 16 kHz mono referans WAV (ayrıştırılmış diyalog). */
   reference: string
+  /**
+   * Ayrıştırılmış arka plan: müzik + ortam, diyalog çıkarılmış.
+   * Varsa replik boyunca orijinal ses yerine bu çalınıyor — "sen konuşurken
+   * orijinal repliği sil, müziği bırak" bunun sayesinde yaklaşıklama değil
+   * gerçek oluyor. Yoksa merkez iptali / ducking modlarına düşülür.
+   */
+  background?: string
   durationMs: number
   characters: PackCharacter[]
   lines: PackLine[]
@@ -121,6 +128,7 @@ export function parsePack(raw: unknown): Pack {
     title: typeof o.title === 'string' ? o.title : id,
     video: typeof o.video === 'string' ? o.video : 'clip.mp4',
     reference: typeof o.reference === 'string' ? o.reference : 'ref.wav',
+    background: typeof o.background === 'string' ? o.background : undefined,
     durationMs,
     characters,
     lines,

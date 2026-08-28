@@ -1,7 +1,7 @@
-import { useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Pack } from '../../lib/pack.ts'
 import type { StoredTake } from '../../lib/store.ts'
-import { decodeAudio } from '../../lib/audio/context.ts'
+import { audioContext, decodeAudio, resumeAudio } from '../../lib/audio/context.ts'
 import type { PackData } from '../player/usePackData.ts'
 import { useT } from '../../i18n/index.tsx'
 import type { MessageKey } from '../../i18n/messages.ts'
@@ -26,7 +26,8 @@ interface Props {
 
 type Stage = { label: string; ratio: number } | null
 
-const ORIGINAL_MODES: OriginalMode[] = ['mute', 'removeVocals', 'duck']
+/** `stems` yalnızca paket gerçek ayrıştırma içeriyorsa listeleniyor. */
+const ORIGINAL_MODES: OriginalMode[] = ['stems', 'mute', 'removeVocals', 'duck']
 
 export function ExportPanel({ pack, data, activeTakeFor, originalMode, onOriginalModeChange }: Props) {
   const t = useT()
@@ -34,12 +35,53 @@ export function ExportPanel({ pack, data, activeTakeFor, originalMode, onOrigina
   const [error, setError] = useState<string | null>(null)
   /** Kaynağın vokal bastırmaya uygun olup olmadığı — ilk mikste öğreniliyor. */
   const [stereoWarning, setStereoWarning] = useState<string | null>(null)
+  const [playing, setPlaying] = useState(false)
+  const sourceRef = useRef<AudioBufferSourceNode | null>(null)
+
+  /**
+   * Final miksi videoyu oynatmadan dinletir.
+   *
+   * Dublajda kontrol edilmek istenen şey görüntü değil ses: replik doğru yere
+   * mi oturdu, arka planla dengesi tuttu mu. Video açıkken bunu duymak
+   * zorlaşıyor.
+   */
+  const previewAudio = useCallback(async () => {
+    if (sourceRef.current) {
+      sourceRef.current.stop()
+      sourceRef.current = null
+      setPlaying(false)
+      return
+    }
+    setError(null)
+    try {
+      await resumeAudio()
+      const mixed = await renderMixed()
+      setStage(null)
+      const ctx = audioContext()
+      const source = ctx.createBufferSource()
+      source.buffer = mixed
+      source.connect(ctx.destination)
+      source.onended = () => {
+        sourceRef.current = null
+        setPlaying(false)
+      }
+      source.start()
+      sourceRef.current = source
+      setPlaying(true)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+      setStage(null)
+    }
+  }, [])
+
+  useEffect(() => () => sourceRef.current?.stop(), [])
   const [wavFallback, setWavFallback] = useState<Uint8Array | null>(null)
 
   const recorded = pack.lines.filter((l) => activeTakeFor(l.id))
   const fileBase = pack.id || 'dublaj'
 
-  async function buildMixWav(): Promise<Uint8Array> {
+  /** Final miksi üretir. Hem dinletme hem dışa aktarma bunu kullanıyor. */
+  async function renderMixed(): Promise<AudioBuffer> {
     setStage({ label: t('export.stage.audio'), ratio: 0.1 })
     const videoBytes = await data.fetchVideoBytes()
     const original = await decodeAudio(videoBytes.buffer.slice(0) as ArrayBuffer)
@@ -65,14 +107,18 @@ export function ExportPanel({ pack, data, activeTakeFor, originalMode, onOrigina
     }
 
     setStage({ label: t('export.stage.mixing'), ratio: 0.3 })
-    const mixed = await renderMix({
+    return renderMix({
       original,
+      background: data.background,
       takes,
       duckRanges: recorded.map((l) => ({ startMs: l.startMs, endMs: l.endMs })),
       originalMode,
       durationMs: pack.durationMs,
     })
-    return audioBufferToWav(mixed)
+  }
+
+  async function buildMixWav(): Promise<Uint8Array> {
+    return audioBufferToWav(await renderMixed())
   }
 
   async function exportVideo() {
@@ -126,6 +172,9 @@ export function ExportPanel({ pack, data, activeTakeFor, originalMode, onOrigina
         >
           {stage ? t('export.preparing') : t('export.downloadMp4')}
         </button>
+        <button className="btn btn-sm" onClick={previewAudio} disabled={recorded.length === 0 || stage !== null}>
+          {playing ? t('export.stopAudio') : t('export.previewAudio')}
+        </button>
         <button className="btn btn-sm" onClick={exportAudioOnly} disabled={recorded.length === 0 || stage !== null}>
           {t('export.audioOnly')}
         </button>
@@ -139,7 +188,7 @@ export function ExportPanel({ pack, data, activeTakeFor, originalMode, onOrigina
             onChange={(e) => onOriginalModeChange(e.target.value as OriginalMode)}
             disabled={stage !== null}
           >
-            {ORIGINAL_MODES.map((m) => (
+            {ORIGINAL_MODES.filter((m) => m !== 'stems' || data.background).map((m) => (
               <option key={m} value={m}>
                 {t(`export.mode.${m}` as MessageKey)}
               </option>

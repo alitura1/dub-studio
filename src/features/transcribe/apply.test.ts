@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { fillLineTexts } from './apply.ts'
+import { fillLineTexts, linesFromWords } from './apply.ts'
 import type { TranscriptResult } from './whisper.ts'
 import type { PackLine } from '../../lib/pack.ts'
 
@@ -116,5 +116,82 @@ describe('fillLineTexts', () => {
       ]),
     }
     expect(fillLineTexts(LINES, result)[0].text).toBe('Merhaba, dünya!')
+  })
+})
+
+describe('linesFromWords', () => {
+  const chars = [
+    { id: 'k1', name: 'A', color: '#f00' },
+    { id: 'k2', name: 'B', color: '#00f' },
+  ]
+
+  it('cümle sonu noktalamasında böler ve karakterleri sırayla dağıtır', () => {
+    const lines = linesFromWords(
+      words([
+        [1000, 1300, 'Merhaba'],
+        [1300, 1700, 'dünya.'],
+        [1900, 2200, 'Nasılsın?'],
+      ]),
+      chars,
+      10000,
+    )
+
+    expect(lines).toHaveLength(2)
+    expect(lines[0].text).toBe('Merhaba dünya.')
+    expect(lines[0].characterId).toBe('k1')
+    expect(lines[1].text).toBe('Nasılsın?')
+    expect(lines[1].characterId).toBe('k2')
+  })
+
+  it('uzun sessizlikte böler', () => {
+    const lines = linesFromWords(
+      words([
+        [1000, 1300, 'bir'],
+        [1300, 1600, 'iki'],
+        // 900 ms boşluk
+        [2500, 2800, 'üç'],
+      ]),
+      chars,
+      10000,
+    )
+    expect(lines.map((l) => l.text)).toEqual(['bir iki', 'üç'])
+  })
+
+  it('noktalamasız uzun repliği en geniş duraktan böler', () => {
+    /*
+     * Gerçek vaka: "Life is a precious gift to throw yours away and be a real
+     * slap in the lord's face, don't you think?" tek parça 5.5 saniye geliyordu
+     * ve tek nefeste seslendirilemiyordu.
+     */
+    const spec: Array<[number, number, string]> = []
+    for (let i = 0; i < 12; i++) {
+      const start = 1000 + i * 500
+      // 6. kelimeden önce belirgin bir durak
+      const shift = i >= 6 ? 700 : 0
+      spec.push([start + shift, start + shift + 300, `k${i}`])
+    }
+    const lines = linesFromWords(words(spec), chars, 20000)
+
+    expect(lines.length).toBeGreaterThan(1)
+    for (const l of lines) expect(l.endMs - l.startMs).toBeLessThan(4600)
+  })
+
+  it('sınırları kelime damgalarından alır, paylı', () => {
+    const lines = linesFromWords(words([[2000, 2600, 'tek.']]), chars, 10000)
+    expect(lines[0].startMs).toBe(1880)
+    expect(lines[0].endMs).toBe(2720)
+  })
+
+  it('komşu replikler çakışmaz', () => {
+    const lines = linesFromWords(
+      words([
+        [1000, 1400, 'bir.'],
+        [1450, 1900, 'iki.'],
+      ]),
+      chars,
+      10000,
+    )
+    expect(lines).toHaveLength(2)
+    expect(lines[0].endMs).toBeLessThanOrEqual(lines[1].startMs)
   })
 })
